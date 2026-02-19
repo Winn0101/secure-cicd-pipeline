@@ -1,0 +1,115 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing Trivy..."
+      - wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+      - echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | tee -a /etc/apt/sources.list.d/trivy.list
+      - apt-get update
+      - apt-get install -y trivy
+
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${IMAGE_TAG:-$COMMIT_HASH}
+      - FULL_IMAGE_URI="$ECR_REPOSITORY_URI:$IMAGE_TAG"
+      - mkdir -p reports
+      - SCAN_ID="container-scan-$(date +%s)"
+
+  build:
+    commands:
+      - echo "=== Scanning Container Image for Vulnerabilities ==="
+      - |
+        trivy image \
+          --severity CRITICAL,HIGH,MEDIUM \
+          --format json \
+          --output reports/trivy-vulnerability-scan.json \
+          $FULL_IMAGE_URI
+      
+      - echo "=== Scanning for Secrets in Image ==="
+      - |
+        trivy image \
+          --scanners secret \
+          --format json \
+          --output reports/trivy-secrets-scan.json \
+          $FULL_IMAGE_URI
+      
+      - echo "=== Scanning Image Configuration ==="
+      - |
+        trivy image \
+          --scanners config \
+          --format json \
+          --output reports/trivy-config-scan.json \
+          $FULL_IMAGE_URI
+      
+      - echo "=== Analyzing Scan Results ==="
+      - |
+        CRITICAL_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' reports/trivy-vulnerability-scan.json || echo "0")
+        HIGH_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' reports/trivy-vulnerability-scan.json || echo "0")
+        MEDIUM_COUNT=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' reports/trivy-vulnerability-scan.json || echo "0")
+        SECRET_COUNT=$(jq '[.Results[]?.Secrets[]?] | length' reports/trivy-secrets-scan.json || echo "0")
+        
+        echo "Vulnerability Summary:"
+        echo "  Critical: $CRITICAL_COUNT"
+        echo "  High: $HIGH_COUNT"
+        echo "  Medium: $MEDIUM_COUNT"
+        echo "  Secrets: $SECRET_COUNT"
+        
+        # Create summary
+        cat > reports/container-scan-summary.json << EOL
+        {
+          "scan_id": "$SCAN_ID",
+          "image": "$FULL_IMAGE_URI",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "vulnerabilities": {
+            "critical": $CRITICAL_COUNT,
+            "high": $HIGH_COUNT,
+            "medium": $MEDIUM_COUNT
+          },
+          "secrets_found": $SECRET_COUNT
+        }
+        EOL
+
+  post_build:
+    commands:
+      - echo "=== Uploading Reports to S3 ==="
+      - aws s3 cp reports/ s3://$SCAN_REPORTS_BUCKET/container-scans/$SCAN_ID/ --recursive
+      
+      - echo "=== Storing Results in DynamoDB ==="
+      - |
+        aws dynamodb put-item \
+          --table-name $SCAN_RESULTS_TABLE \
+          --item "{
+            \"scan_id\": {\"S\": \"$SCAN_ID\"},
+            \"timestamp\": {\"S\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"},
+            \"scan_type\": {\"S\": \"container\"},
+            \"results\": {\"S\": \"$(cat reports/container-scan-summary.json | jq -c .)\"},
+            \"ttl\": {\"N\": \"$(date -d '+90 days' +%s)\"}
+          }"
+      
+      - echo "=== Checking Scan Results ==="
+      - |
+        if [ "$CRITICAL_COUNT" -gt 0 ] || [ "$SECRET_COUNT" -gt 0 ]; then
+          if [ "$FAIL_ON_HIGH" = "true" ]; then
+            echo "Container scan FAILED - Critical vulnerabilities or secrets found"
+            exit 1
+          else
+            echo "⚠️ Issues found but continuing (FAIL_ON_HIGH=false)"
+          fi
+        elif [ "$HIGH_COUNT" -gt 5 ]; then
+          echo "⚠️ Warning: High number of HIGH severity vulnerabilities"
+        else
+          echo "Container scan PASSED"
+        fi
+
+artifacts:
+  files:
+    - 'reports/**/*'
+  name: container-scan-reports
+
+cache:
+  paths:
+    - '/root/.cache/trivy/**/*'

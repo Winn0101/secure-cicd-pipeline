@@ -1,0 +1,61 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "Installing dependencies..."
+      - cd sample-app
+      - pip3 install -r requirements.txt
+      - pip3 install pytest pytest-cov
+
+  build:
+    commands:
+      - echo "Running unit tests..."
+      - |
+        pytest tests/ \
+          --verbose \
+          --junitxml=../reports/junit.xml \
+          --cov=src \
+          --cov-report=xml:../reports/coverage.xml \
+          --cov-report=html:../reports/coverage-html \
+          --cov-report=term
+      
+      - echo "Tests completed"
+
+  post_build:
+    commands:
+      - echo "Analyzing test results..."
+      - |
+        if [ -f "../reports/junit.xml" ]; then
+          TESTS_TOTAL=$(xmllint --xpath 'count(//testsuite/@tests)' ../reports/junit.xml)
+          TESTS_FAILURES=$(xmllint --xpath 'count(//testsuite/@failures)' ../reports/junit.xml)
+          TESTS_ERRORS=$(xmllint --xpath 'count(//testsuite/@errors)' ../reports/junit.xml)
+          
+          echo "Test Summary:"
+          echo "  Total: $TESTS_TOTAL"
+          echo "  Failures: $TESTS_FAILURES"
+          echo "  Errors: $TESTS_ERRORS"
+          
+          if [ "$TESTS_FAILURES" -gt 0 ] || [ "$TESTS_ERRORS" -gt 0 ]; then
+            echo "Tests FAILED"
+            exit 1
+          else
+            echo "All tests PASSED"
+          fi
+        else
+          echo "No test results found"
+          exit 1
+        fi
+
+artifacts:
+  files:
+    - 'reports/**/*'
+  name: test-reports
+
+reports:
+  pytest_reports:
+    files:
+      - 'reports/junit.xml'
+    file-format: 'JUNITXML'

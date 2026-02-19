@@ -1,0 +1,51 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $ECR_REPOSITORY_URI
+      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+      - IMAGE_TAG=${IMAGE_TAG:-$COMMIT_HASH}
+      - echo "Building image with tag $IMAGE_TAG"
+
+  build:
+    commands:
+      - echo "Building Docker image..."
+      - cd sample-app
+      - |
+        docker build \
+          -t $ECR_REPOSITORY_URI:$IMAGE_TAG \
+          -t $ECR_REPOSITORY_URI:latest \
+          --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+          --build-arg VCS_REF=$COMMIT_HASH \
+          --label "org.opencontainers.image.created=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+          --label "org.opencontainers.image.revision=$COMMIT_HASH" \
+          --label "org.opencontainers.image.version=$IMAGE_TAG" \
+          .
+      
+      - echo "Image built successfully"
+      - docker images
+
+  post_build:
+    commands:
+      - echo "Pushing Docker image to ECR..."
+      - docker push $ECR_REPOSITORY_URI:$IMAGE_TAG
+      - docker push $ECR_REPOSITORY_URI:latest
+      
+      - echo "Writing image definitions file..."
+      - |
+        cat > ../imagedefinitions.json << EOL
+        {
+          "image_uri": "$ECR_REPOSITORY_URI:$IMAGE_TAG",
+          "commit_hash": "$COMMIT_HASH",
+          "build_time": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+        }
+        EOL
+      
+      - echo "Container build completed"
+
+artifacts:
+  files:
+    - imagedefinitions.json
+  name: container-build-output

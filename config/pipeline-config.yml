@@ -1,0 +1,72 @@
+pipeline:
+  name: secure-cicd-demo
+  stages:
+    - name: source
+      enabled: true
+    - name: security-scan
+      enabled: true
+      fail_on_critical: true
+    - name: build
+      enabled: true
+    - name: test
+      enabled: true
+    - name: policy-check
+      enabled: true
+      fail_on_violation: true
+    - name: deploy-staging
+      enabled: true
+      requires_approval: false
+    - name: deploy-production
+      enabled: true
+      requires_approval: true
+
+security:
+  secrets_scanning:
+    enabled: true
+    tools:
+      - git-secrets
+      - trufflehog
+    fail_on_detection: true
+    
+  container_scanning:
+    enabled: true
+    tool: trivy
+    severity_threshold: HIGH
+    ignore_unfixed: false
+    
+  iac_scanning:
+    enabled: true
+    tool: checkov
+    frameworks:
+      - terraform
+      - dockerfile
+      - kubernetes
+    skip_checks: []
+    
+  dependency_scanning:
+    enabled: true
+    tools:
+      - safety  # Python
+      - npm-audit  # Node.js
+    fail_on_high: true
+
+policy:
+  enforcement_mode: strict  # strict, advisory, permissive
+  break_glass_enabled: true
+  break_glass_approvers:
+    - arn:aws:iam::ACCOUNT_ID:user/admin
+  
+approval:
+  production_deployment:
+    required: true
+    minimum_approvers: 1
+    timeout_hours: 24
+    auto_approve_on_timeout: false
+
+compliance:
+  frameworks:
+    - CIS
+    - SOC2
+    - PCI-DSS
+  audit_logging: true
+  retention_days: 90

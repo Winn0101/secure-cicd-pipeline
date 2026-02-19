@@ -1,0 +1,36 @@
+{
+  "allowed_base_images": [
+    "amazonlinux:2",
+    "alpine:3.18",
+    "ubuntu:22.04",
+    "python:3.11-slim",
+    "node:18-alpine"
+  ],
+  "required_labels": [
+    "version",
+    "maintainer",
+    "description"
+  ],
+  "encryption_required": [
+    "aws_s3_bucket",
+    "aws_ebs_volume",
+    "aws_rds_db_instance",
+    "aws_dynamodb_table"
+  ],
+  "public_access_prohibited": [
+    "aws_s3_bucket",
+    "aws_rds_db_instance",
+    "aws_elasticsearch_domain"
+  ],
+  "required_tags": [
+    "Environment",
+    "Owner",
+    "Project",
+    "CostCenter"
+  ],
+  "max_high_vulnerabilities": 0,
+  "deployment_window": {
+    "days": ["Mon", "Tue", "Wed", "Thu"],
+    "hours": [10, 16]
+  }
+}

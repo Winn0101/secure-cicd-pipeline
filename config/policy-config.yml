@@ -1,0 +1,99 @@
+# Security Policy Configuration
+
+container_policies:
+  allowed_base_images:
+    - "amazonlinux:2"
+    - "alpine:3.18"
+    - "ubuntu:22.04"
+    - "python:3.11-slim"
+    - "node:18-alpine"
+  
+  blocked_base_images:
+    - "*:latest"  # Never use latest tag
+    - "scratch"   # Too minimal
+  
+  required_labels:
+    - version
+    - maintainer
+    - description
+  
+  prohibited_practices:
+    - running_as_root: true
+    - exposed_secrets: true
+    - outdated_packages: true
+  
+  max_layers: 25
+  max_image_size_mb: 500
+
+terraform_policies:
+  required_tags:
+    - Environment
+    - Owner
+    - Project
+    - CostCenter
+  
+  prohibited_resources:
+    - "aws_iam_policy.admin_access"
+    - "aws_security_group.allow_all"
+  
+  encryption_required:
+    - aws_s3_bucket
+    - aws_ebs_volume
+    - aws_rds_db_instance
+    - aws_dynamodb_table
+  
+  public_access_prohibited:
+    - aws_s3_bucket
+    - aws_rds_db_instance
+    - aws_elasticsearch_domain
+
+deployment_policies:
+  staging:
+    allow_skip_tests: false
+    allow_force_push: false
+    rollback_on_failure: true
+  
+  production:
+    require_approval: true
+    require_tests_pass: true
+    require_security_scan_pass: true
+    require_policy_check_pass: true
+    blue_green_deployment: true
+    canary_percentage: 10
+    rollback_on_failure: true
+    deployment_window:
+      days: [Mon, Tue, Wed, Thu]
+      hours: [10, 11, 12, 13, 14, 15, 16]
+      timezone: UTC
+
+compliance_policies:
+  cis_benchmarks:
+    enabled: true
+    checks:
+      - no_root_user
+      - mfa_enabled
+      - password_policy
+      - no_unused_credentials
+      - encrypted_at_rest
+  
+  soc2:
+    enabled: true
+    controls:
+      - access_control
+      - change_management
+      - audit_logging
+      - data_encryption
+  
+  pci_dss:
+    enabled: false
+    requirements: []
+
+break_glass:
+  enabled: true
+  require_justification: true
+  require_approval: true
+  auto_revert_after_hours: 4
+  notification_channels:
+    - email
+    - slack
+  audit_retention_days: 365

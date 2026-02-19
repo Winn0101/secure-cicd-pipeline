@@ -1,0 +1,30 @@
+framework:
+  - terraform
+  - dockerfile
+  - kubernetes
+  - secrets
+
+check:
+  - CKV_AWS_18  # Ensure S3 bucket has access logging enabled
+  - CKV_AWS_19  # Ensure S3 bucket has server side encryption enabled
+  - CKV_AWS_20  # Ensure S3 bucket has versioning enabled
+  - CKV_AWS_21  # Ensure S3 bucket has MFA delete enabled
+  - CKV_AWS_23  # Ensure security groups do not have unrestricted ingress
+  - CKV_AWS_24  # Ensure no security groups allow ingress from 0.0.0.0/0 to port 22
+  - CKV_AWS_25  # Ensure no security groups allow ingress from 0.0.0.0/0 to port 3389
+  - CKV_AWS_33  # Ensure KMS key rotation is enabled
+  - CKV_AWS_40  # Ensure IAM policies are attached only to groups or roles
+  - CKV_AWS_45  # Ensure no hard-coded secrets exist in EC2 user data
+  - CKV_AWS_46  # Ensure no hard-coded secrets exist in lambda environment
+  - CKV_AWS_61  # Ensure RDS database has IAM authentication enabled
+  - CKV_AWS_79  # Ensure Instance Metadata Service Version 1 is not enabled
+
+skip-check:
+  # Add any checks to skip with justification
+  # - CKV_AWS_XXX  # Reason for skipping
+
+output: json
+download-external-modules: true
+compact: false
+quiet: false
+no-guide: false

@@ -1,0 +1,10 @@
+aws_region                 = "us-east-1"
+environment                = "dev"
+project_name               = "secure-cicd"
+github_repo                = "Winn0101/secure-cicd"  # CHANGE THIS
+github_branch              = "main"
+notification_email         = "winnerselekwachi@gmail.com"   # CHANGE THIS
+approval_sns_emails        = ["winnerselekwachi@gmail.com"] # CHANGE THIS
+security_scan_fail_on_high = true
+policy_enforcement_mode    = "strict"
+enable_break_glass         = true

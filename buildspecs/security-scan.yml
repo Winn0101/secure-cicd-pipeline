@@ -1,0 +1,163 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "Installing security scanning tools..."
+      # Install Trivy
+      - wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor -o /usr/share/keyrings/trivy.gpg
+      - echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | tee -a /etc/apt/sources.list.d/trivy.list
+      - apt-get update
+      - apt-get install -y trivy
+      
+      # Install Checkov
+      - pip3 install checkov
+      
+      # Install git-secrets
+      - git clone https://github.com/awslabs/git-secrets.git /tmp/git-secrets
+      - cd /tmp/git-secrets && make install
+      
+      # Install OPA
+      - curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v0.59.0/opa_linux_amd64_static
+      - chmod 755 /usr/local/bin/opa
+
+  pre_build:
+    commands:
+      - echo "Starting security scans..."
+      - mkdir -p reports
+      - SCAN_ID="scan-$(date +%s)"
+      - TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+  build:
+    commands:
+      - echo "=== Secrets Scanning ==="
+      - |
+        # Initialize git-secrets
+        git secrets --install || true
+        git secrets --register-aws || true
+        
+        # Scan for secrets
+        if git secrets --scan -r .; then
+          echo "✓ No secrets found"
+          SECRETS_RESULT="PASS"
+        else
+          echo "✗ Secrets detected!"
+          SECRETS_RESULT="FAIL"
+          echo '{"severity":"CRITICAL","message":"Secrets detected in code"}' > reports/secrets-findings.json
+        fi
+      
+      - echo "=== Infrastructure Scanning ==="
+      - |
+        # Scan Terraform files with Checkov
+        if [ -d "terraform" ]; then
+          checkov \
+            --directory terraform \
+            --framework terraform \
+            --output json \
+            --output-file-path reports/ \
+            --soft-fail || true
+          
+          if [ -f "reports/results_json.json" ]; then
+            mv reports/results_json.json reports/checkov-results.json
+            
+            FAILED=$(jq '.summary.failed' reports/checkov-results.json)
+            if [ "$FAILED" -gt 0 ]; then
+              echo "✗ Found $FAILED Checkov violations"
+              IAC_RESULT="FAIL"
+            else
+              echo "✓ Checkov scan passed"
+              IAC_RESULT="PASS"
+            fi
+          fi
+        else
+          echo "No Terraform files to scan"
+          IAC_RESULT="SKIP"
+        fi
+      
+      - echo "=== Dockerfile Scanning ==="
+      - |
+        # Scan Dockerfile with Trivy
+        if [ -f "sample-app/Dockerfile" ]; then
+          trivy config \
+            --severity HIGH,CRITICAL \
+            --format json \
+            --output reports/dockerfile-scan.json \
+            sample-app/Dockerfile || true
+          
+          DOCKERFILE_ISSUES=$(jq '[.Results[]?.Misconfigurations[]? | select(.Severity=="HIGH" or .Severity=="CRITICAL")] | length' reports/dockerfile-scan.json || echo "0")
+          
+          if [ "$DOCKERFILE_ISSUES" -gt 0 ]; then
+            echo "✗ Found $DOCKERFILE_ISSUES Dockerfile issues"
+            DOCKERFILE_RESULT="FAIL"
+          else
+            echo "✓ Dockerfile scan passed"
+            DOCKERFILE_RESULT="PASS"
+          fi
+        else
+          echo "No Dockerfile to scan"
+          DOCKERFILE_RESULT="SKIP"
+        fi
+
+  post_build:
+    commands:
+      - echo "=== Generating Security Report ==="
+      - |
+        # Create summary report
+        cat > reports/security-scan-summary.json << EOL
+        {
+          "scan_id": "$SCAN_ID",
+          "timestamp": "$TIMESTAMP",
+          "results": {
+            "secrets_scan": "$SECRETS_RESULT",
+            "iac_scan": "$IAC_RESULT",
+            "dockerfile_scan": "$DOCKERFILE_RESULT"
+          },
+          "environment": "$ENVIRONMENT"
+        }
+        EOL
+      
+      - echo "=== Uploading Reports to S3 ==="
+      - aws s3 cp reports/ s3://$SCAN_REPORTS_BUCKET/security-scans/$SCAN_ID/ --recursive
+      
+      - echo "=== Storing Results in DynamoDB ==="
+      - |
+        aws dynamodb put-item \
+          --table-name $SCAN_RESULTS_TABLE \
+          --item "{
+            \"scan_id\": {\"S\": \"$SCAN_ID\"},
+            \"timestamp\": {\"S\": \"$TIMESTAMP\"},
+            \"scan_type\": {\"S\": \"security\"},
+            \"results\": {\"S\": \"$(cat reports/security-scan-summary.json | jq -c .)\"},
+            \"ttl\": {\"N\": \"$(date -d '+90 days' +%s)\"}
+          }"
+      
+      - echo "=== Checking for Failures ==="
+      - |
+        if [ "$SECRETS_RESULT" = "FAIL" ] || [ "$IAC_RESULT" = "FAIL" ]; then
+          if [ "$FAIL_ON_HIGH" = "true" ]; then
+            echo "Security scan FAILED - blocking pipeline"
+            
+            # Send alert
+            aws sns publish \
+              --topic-arn $SECURITY_ALERTS_TOPIC \
+              --subject "Security Scan Failed" \
+              --message "Security scan detected critical issues. Check S3 bucket: $SCAN_REPORTS_BUCKET/security-scans/$SCAN_ID/"
+            
+            exit 1
+          else
+            echo "Security issues found but continuing (FAIL_ON_HIGH=false)"
+          fi
+        else
+          echo "Security scan PASSED"
+        fi
+
+artifacts:
+  files:
+    - 'reports/**/*'
+  name: security-scan-reports
+
+cache:
+  paths:
+    - '/root/.cache/trivy/**/*'

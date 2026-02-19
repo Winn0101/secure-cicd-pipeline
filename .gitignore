@@ -1,0 +1,95 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfstate.*
+tfplan
+tfplan.*
+deployment-outputs.json
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/tfplan
+
+# Terraform zip files (can be large)
+lambda/*.zip
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+*.cover
+.hypothesis/
+reports/
+*.log
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Docker
+*.log
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+.DS_Store
+Thumbs.db
+*.bak
+
+# Sensitive files
+*.pem
+*.key
+.env
+.env.*
+secrets/
+*.secret
+
+# Reports (can be large)
+reports/
+scans/
+*.sarif
+trivy-results.*
+checkov-results.*
+
+# Node modules (if any)
+node_modules/
+
+# Cache
+.cache/
+*.cache
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+sample-app/build/
+sample-app/dist/
+
+# Coverage reports
+*.xml
+coverage-html/
+.terraform/

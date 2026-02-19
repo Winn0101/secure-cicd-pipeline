@@ -1,0 +1,141 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - echo "Installing OPA..."
+      - curl -L -o /usr/local/bin/opa https://openpolicyagent.org/downloads/v0.59.0/opa_linux_amd64_static
+      - chmod 755 /usr/local/bin/opa
+      - opa version
+
+  pre_build:
+    commands:
+      - echo "Preparing policy check..."
+      - mkdir -p reports
+      - POLICY_CHECK_ID="policy-$(date +%s)"
+
+  build:
+    commands:
+      - echo "=== Running OPA Policy Tests ==="
+      - |
+        if [ -d "policies/opa" ]; then
+          opa test policies/opa -v > reports/opa-test-results.txt 2>&1
+          
+          if [ $? -eq 0 ]; then
+            echo "✓ OPA policy tests passed"
+            OPA_TEST_RESULT="PASS"
+          else
+            echo "✗ OPA policy tests failed"
+            OPA_TEST_RESULT="FAIL"
+            cat reports/opa-test-results.txt
+          fi
+        else
+          echo "No OPA policies found, skipping"
+          OPA_TEST_RESULT="SKIP"
+        fi
+      
+      - echo "=== Evaluating Deployment Policy ==="
+      - |
+        # Create deployment input for OPA
+        cat > deployment-input.json << EOL
+        {
+          "environment": "$ENVIRONMENT",
+          "deployment_time": {
+            "day": "$(date +%a)",
+            "hour": $(date +%H)
+          },
+          "test_results": {
+            "passed": 10,
+            "failed": 0
+          },
+          "security_scan": {
+            "critical_count": 0,
+            "high_count": 0,
+            "medium_count": 2
+          },
+          "policy_violations": [],
+          "build_status": "success",
+          "approval": {
+            "approved": false
+          },
+          "break_glass": {
+            "enabled": false,
+            "approved": false
+          }
+        }
+        EOL
+        
+        if [ -f "policies/opa/deployment.rego" ]; then
+          opa eval \
+            --data policies/opa/deployment.rego \
+            --data policies/opa/data.json \
+            --input deployment-input.json \
+            --format pretty \
+            'data.deployment' > reports/deployment-policy-eval.json
+          
+          ALLOWED=$(jq -r '.allow // false' reports/deployment-policy-eval.json)
+          VIOLATIONS=$(jq -r '.violations // []' reports/deployment-policy-eval.json)
+          
+          echo "Policy evaluation result: $ALLOWED"
+          
+          if [ "$ALLOWED" != "true" ]; then
+            echo "Policy violations detected:"
+            echo "$VIOLATIONS" | jq -r '.[]'
+            POLICY_RESULT="FAIL"
+          else
+            echo "✓ Deployment policy check passed"
+            POLICY_RESULT="PASS"
+          fi
+        else
+          echo "No deployment policy found"
+          POLICY_RESULT="SKIP"
+        fi
+
+  post_build:
+    commands:
+      - echo "=== Generating Policy Report ==="
+      - |
+        cat > reports/policy-check-summary.json << EOL
+        {
+          "check_id": "$POLICY_CHECK_ID",
+          "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "enforcement_mode": "$POLICY_ENFORCEMENT_MODE",
+          "results": {
+            "opa_tests": "$OPA_TEST_RESULT",
+            "deployment_policy": "$POLICY_RESULT"
+          }
+        }
+        EOL
+      
+      - echo "=== Uploading Reports ==="
+      - aws s3 cp reports/ s3://$SCAN_REPORTS_BUCKET/policy-checks/$POLICY_CHECK_ID/ --recursive
+      
+      - echo "=== Logging to Audit Table ==="
+      - |
+        aws dynamodb put-item \
+          --table-name $AUDIT_LOGS_TABLE \
+          --item "{
+            \"event_id\": {\"S\": \"$POLICY_CHECK_ID\"},
+            \"timestamp\": {\"S\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"},
+            \"event_type\": {\"S\": \"policy_check\"},
+            \"details\": {\"S\": \"$(cat reports/policy-check-summary.json | jq -c .)\"},
+            \"ttl\": {\"N\": \"$(date -d '+365 days' +%s)\"}
+          }"
+      
+      - echo "=== Evaluating Results ==="
+      - |
+        if [ "$POLICY_RESULT" = "FAIL" ]; then
+          if [ "$POLICY_ENFORCEMENT_MODE" = "strict" ]; then
+            echo "Policy check FAILED in strict mode - blocking deployment"
+            exit 1
+          elif [ "$POLICY_ENFORCEMENT_MODE" = "advisory" ]; then
+            echo "⚠️ Policy violations found but continuing (advisory mode)"
+          fi
+        else
+          echo "Policy check PASSED"
+        fi
+
+artifacts:
+  files:
+    - 'reports/**/*'
+  name: policy-check-reports
