@@ -64,7 +64,7 @@ resource "aws_codebuild_project" "deploy" {
   }
 }
 
-# CodePipeline
+# CodePipeline - WITHOUT KMS encryption on artifact store
 resource "aws_codepipeline" "main" {
   name     = "${var.project_name}-pipeline"
   role_arn = aws_iam_role.codepipeline_role.arn
@@ -72,11 +72,7 @@ resource "aws_codepipeline" "main" {
   artifact_store {
     location = aws_s3_bucket.pipeline_artifacts.bucket
     type     = "S3"
-
-    encryption_key {
-      id   = aws_kms_key.secrets.arn
-      type = "KMS"
-    }
+    # Removed encryption_key to use S3 default encryption
   }
 
   stage {
@@ -91,9 +87,9 @@ resource "aws_codepipeline" "main" {
       output_artifacts = ["source_output"]
 
       configuration = {
-        ConnectionArn    = aws_codestarconnections_connection.github.arn
-        FullRepositoryId = var.github_repo
-        BranchName       = var.github_branch
+        ConnectionArn        = aws_codestarconnections_connection.github.arn
+        FullRepositoryId     = var.github_repo
+        BranchName           = var.github_branch
         OutputArtifactFormat = "CODE_ZIP"
       }
     }
@@ -254,9 +250,9 @@ resource "aws_cloudwatch_event_target" "pipeline_notification" {
 
   input_transformer {
     input_paths = {
-      pipeline   = "$.detail.pipeline"
-      state      = "$.detail.state"
-      execution  = "$.detail.execution-id"
+      pipeline  = "$.detail.pipeline"
+      state     = "$.detail.state"
+      execution = "$.detail.execution-id"
     }
     input_template = <<EOF
 {
