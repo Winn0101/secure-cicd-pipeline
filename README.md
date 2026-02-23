@@ -331,6 +331,68 @@ You'll receive notifications for:
 - Approval requests
 - Break-glass deployments
 
+## 🔗 GitHub Connection Setup
+
+After deployment, you must authorize the GitHub connection:
+
+### Option 1: AWS Console (Recommended)
+
+1. Navigate to: [AWS Developer Tools > Connections](https://console.aws.amazon.com/codesuite/settings/connections)
+2. Find connection named `secure-cicd-github`
+3. Status will show "Pending"
+4. Click **"Update pending connection"**
+5. Click **"Install a new app"** (or select existing GitHub App)
+6. Authorize **AWS Connector for GitHub** in your GitHub account
+7. Select your repository: `your-username/secure-cicd-pipeline`
+8. Click **"Connect"**
+9. Status should change to "Available"
+
+### Option 2: AWS CLI
+```bash
+# Get connection ARN
+CONNECTION_ARN=$(cd terraform && terraform output -raw github_connection_arn)
+
+# Check status
+aws codestar-connections get-connection \
+  --connection-arn $CONNECTION_ARN
+
+# After manual authorization in console, verify
+aws codestar-connections get-connection \
+  --connection-arn $CONNECTION_ARN \
+  --query 'Connection.ConnectionStatus' \
+  --output text
+```
+
+### Troubleshooting Connection Issues
+
+**Problem**: Connection stuck in "Pending" status
+
+**Solution**:
+1. Delete the pending connection
+2. Create new connection via console
+3. Complete OAuth flow immediately
+4. Update Terraform to use new ARN (or let Terraform recreate)
+
+**Problem**: Pipeline doesn't trigger on push
+
+**Solutions**:
+1. Verify connection status is "Available"
+2. Check repository webhook exists in GitHub:
+   - Go to: Repository → Settings → Webhooks
+   - Should see AWS CodePipeline webhook
+3. Manually trigger pipeline to test:
+```bash
+   aws codepipeline start-pipeline-execution \
+     --name secure-cicd-pipeline
+```
+
+**Problem**: "Access denied" errors
+
+**Solution**: Verify GitHub App has access to repository:
+1. GitHub → Settings → Applications → AWS Connector
+2. Check repository access
+3. Grant access if needed
+
 ##  Customization
 
 ### Add Custom Security Checks

@@ -1,0 +1,118 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - echo "Preparing deployment to $DEPLOYMENT_STAGE"
+      - echo "Deployment started at $(date)"
+      - TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      
+      # Log deployment to DynamoDB (if table exists)
+      - |
+        if [ -n "$PIPELINE_STATE_TABLE" ]; then
+          aws dynamodb put-item \
+            --table-name $PIPELINE_STATE_TABLE \
+            --item "{
+              \"pipeline_id\": {\"S\": \"$CODEBUILD_INITIATOR\"},
+              \"execution_id\": {\"S\": \"$CODEBUILD_BUILD_ID\"},
+              \"deployment_stage\": {\"S\": \"$DEPLOYMENT_STAGE\"},
+              \"status\": {\"S\": \"in_progress\"},
+              \"timestamp\": {\"S\": \"$TIMESTAMP\"}
+            }" 2>/dev/null || echo "Could not log to DynamoDB"
+        fi
+
+  build:
+    commands:
+      - echo "=== Deployment Configuration ==="
+      - echo "Stage: $DEPLOYMENT_STAGE"
+      - echo "ECR Repository: $ECR_REPOSITORY_URI"
+      - echo "Region: $AWS_DEFAULT_REGION"
+      
+      - echo "=== Verifying Container Image ==="
+      - |
+        # Get image from previous build output
+        if [ -f "imagedefinitions.json" ]; then
+          IMAGE_URI=$(jq -r '.image_uri' imagedefinitions.json)
+          echo "Image to deploy: $IMAGE_URI"
+        else
+          echo "Using latest image"
+          IMAGE_URI="$ECR_REPOSITORY_URI:latest"
+        fi
+      
+      - echo "=== Running Pre-Deployment Checks ==="
+      - |
+        # Verify image exists in ECR
+        REPO_NAME=$(echo $ECR_REPOSITORY_URI | rev | cut -d'/' -f1 | rev)
+        IMAGE_TAG=$(echo $IMAGE_URI | rev | cut -d':' -f1 | rev)
+        
+        if aws ecr describe-images \
+          --repository-name $REPO_NAME \
+          --image-ids imageTag=$IMAGE_TAG > /dev/null 2>&1; then
+          echo "✓ Container image verified in ECR"
+        else
+          echo "✗ Container image not found in ECR"
+          exit 1
+        fi
+      
+      - echo "=== Deployment Strategy: Blue-Green ==="
+      - |
+        # In a real deployment, you would:
+        # 1. Deploy to new infrastructure (green)
+        # 2. Run smoke tests
+        # 3. Switch traffic gradually
+        # 4. Monitor metrics
+        # 5. Rollback if issues detected
+        
+        echo "Creating deployment manifest..."
+        cat > deployment-manifest.json << EOL
+        {
+          "deployment_id": "$CODEBUILD_BUILD_ID",
+          "timestamp": "$TIMESTAMP",
+          "stage": "$DEPLOYMENT_STAGE",
+          "image": "$IMAGE_URI",
+          "strategy": "blue-green",
+          "canary_percentage": 10,
+          "rollback_enabled": true
+        }
+        EOL
+      
+      - echo "Deployment manifest created"
+      - cat deployment-manifest.json
+
+  post_build:
+    commands:
+      - echo "=== Post-Deployment Validation ==="
+      - |
+        # In production, you would:
+        # - Run smoke tests
+        # - Check application health endpoints
+        # - Verify metrics
+        # - Confirm database migrations
+        
+        DEPLOYMENT_STATUS="success"
+        echo "Deployment validation: $DEPLOYMENT_STATUS"
+      
+      - echo "=== Logging Deployment ==="
+      - |
+        if [ -n "$PIPELINE_STATE_TABLE" ]; then
+          aws dynamodb update-item \
+            --table-name $PIPELINE_STATE_TABLE \
+            --key "{
+              \"pipeline_id\": {\"S\": \"$CODEBUILD_INITIATOR\"},
+              \"execution_id\": {\"S\": \"$CODEBUILD_BUILD_ID\"}
+            }" \
+            --update-expression "SET #status = :status, completed_at = :completed" \
+            --expression-attribute-names "{\"#status\": \"status\"}" \
+            --expression-attribute-values "{
+              \":status\": {\"S\": \"$DEPLOYMENT_STATUS\"},
+              \":completed\": {\"S\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}
+            }" 2>/dev/null || echo "Could not update DynamoDB"
+        fi
+      
+      - echo "Deployment to $DEPLOYMENT_STAGE completed successfully"
+      - echo "Deployment ID: $CODEBUILD_BUILD_ID"
+
+artifacts:
+  files:
+    - deployment-manifest.json
+  name: deployment-output

@@ -8,6 +8,8 @@ tfplan
 tfplan.*
 deployment-outputs.json
 terraform/.terraform/
+terraform/terraform.tfstate
+terraform.tfstate
 terraform/*.tfstate
 terraform/*.tfstate.backup
 terraform/tfplan

@@ -543,3 +543,21 @@ resource "aws_iam_role_policy" "codepipeline_policy" {
     ]
   })
 }
+# Additional IAM permissions for CodeStar Connections
+resource "aws_iam_role_policy" "codepipeline_codestar" {
+  name_prefix = "${var.project_name}-codestar-"
+  role        = aws_iam_role.codepipeline_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "codestar-connections:UseConnection"
+        ]
+        Resource = aws_codestarconnections_connection.github.arn
+      }
+    ]
+  })
+}

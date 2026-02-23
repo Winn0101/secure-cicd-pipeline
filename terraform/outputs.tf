@@ -75,6 +75,45 @@ output "useful_commands" {
   EOT
 }
 
+output "github_connection_arn" {
+  description = "CodeStar GitHub connection ARN"
+  value       = aws_codestarconnections_connection.github.arn
+}
+
+output "github_connection_status" {
+  description = "GitHub connection status"
+  value       = aws_codestarconnections_connection.github.connection_status
+}
+
+output "setup_instructions" {
+  description = "Post-deployment setup instructions"
+  value = <<-EOT
+
+    ⚠️  IMPORTANT: Complete GitHub Connection Setup
+
+    The CodeStar connection to GitHub needs to be authorized:
+
+    1. Go to AWS Console > Developer Tools > Connections
+    2. Find connection: ${aws_codestarconnections_connection.github.name}
+    3. Click "Update pending connection"
+    4. Click "Install a new app" or "Connect"
+    5. Authorize AWS Connector for GitHub
+    6. Select your repository
+    7. Click "Connect"
+
+    Alternatively, use AWS CLI:
+
+    # Check connection status
+    aws codestar-connections get-connection \
+      --connection-arn ${aws_codestarconnections_connection.github.arn}
+
+    Connection ARN: ${aws_codestarconnections_connection.github.arn}
+    Current Status: ${aws_codestarconnections_connection.github.connection_status}
+
+    Once connected, the pipeline will automatically trigger on code pushes.
+  EOT
+}
+
 output "deployment_info" {
   description = "Deployment information"
   value = <<-EOT

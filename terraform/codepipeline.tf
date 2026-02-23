@@ -1,3 +1,69 @@
+# CodeStar Connection for GitHub (v2)
+resource "aws_codestarconnections_connection" "github" {
+  name          = "${var.project_name}-github"
+  provider_type = "GitHub"
+
+  tags = {
+    Name = "${var.project_name}-github-connection"
+  }
+}
+
+# CodeBuild Project for Deployment
+resource "aws_codebuild_project" "deploy" {
+  name          = "${var.project_name}-deploy"
+  description   = "Deploy application to production"
+  build_timeout = 30
+  service_role  = aws_iam_role.codebuild_role.arn
+
+  artifacts {
+    type = "CODEPIPELINE"
+  }
+
+  environment {
+    compute_type                = "BUILD_GENERAL1_SMALL"
+    image                       = "aws/codebuild/standard:7.0"
+    type                        = "LINUX_CONTAINER"
+    image_pull_credentials_type = "CODEBUILD"
+    privileged_mode             = true
+
+    environment_variable {
+      name  = "DEPLOYMENT_STAGE"
+      value = "production"
+    }
+
+    environment_variable {
+      name  = "ECR_REPOSITORY_URI"
+      value = aws_ecr_repository.app.repository_url
+    }
+
+    environment_variable {
+      name  = "AWS_DEFAULT_REGION"
+      value = var.aws_region
+    }
+
+    environment_variable {
+      name  = "AWS_ACCOUNT_ID"
+      value = data.aws_caller_identity.current.account_id
+    }
+  }
+
+  logs_config {
+    cloudwatch_logs {
+      group_name  = aws_cloudwatch_log_group.codebuild.name
+      stream_name = "deploy"
+    }
+  }
+
+  source {
+    type      = "CODEPIPELINE"
+    buildspec = file("${path.module}/../buildspecs/deploy.yml")
+  }
+
+  tags = {
+    Name = "${var.project_name}-deploy"
+  }
+}
+
 # CodePipeline
 resource "aws_codepipeline" "main" {
   name     = "${var.project_name}-pipeline"
@@ -6,6 +72,11 @@ resource "aws_codepipeline" "main" {
   artifact_store {
     location = aws_s3_bucket.pipeline_artifacts.bucket
     type     = "S3"
+
+    encryption_key {
+      id   = aws_kms_key.secrets.arn
+      type = "KMS"
+    }
   }
 
   stage {
@@ -14,16 +85,16 @@ resource "aws_codepipeline" "main" {
     action {
       name             = "Source"
       category         = "Source"
-      owner            = "ThirdParty"
-      provider         = "GitHub"
+      owner            = "AWS"
+      provider         = "CodeStarSourceConnection"
       version          = "1"
       output_artifacts = ["source_output"]
 
       configuration = {
-        Owner      = split("/", var.github_repo)[0]
-        Repo       = split("/", var.github_repo)[1]
-        Branch     = var.github_branch
-        OAuthToken = "{{resolve:secretsmanager:${aws_secretsmanager_secret.github_token.name}:SecretString:token}}"
+        ConnectionArn    = aws_codestarconnections_connection.github.arn
+        FullRepositoryId = var.github_repo
+        BranchName       = var.github_branch
+        OutputArtifactFormat = "CODE_ZIP"
       }
     }
   }
@@ -130,7 +201,7 @@ resource "aws_codepipeline" "main" {
 
       configuration = {
         NotificationArn = aws_sns_topic.approval_requests.arn
-        CustomData      = "Please review security scan results and approve deployment to production"
+        CustomData      = "Please review security scan results before approving deployment to production. Check the scan reports in S3 and verify all tests passed."
       }
     }
   }
@@ -147,14 +218,7 @@ resource "aws_codepipeline" "main" {
       input_artifacts = ["build_output"]
 
       configuration = {
-        ProjectName = aws_codebuild_project.container_build.name
-        EnvironmentVariablesOverride = jsonencode([
-          {
-            name  = "DEPLOYMENT_STAGE"
-            value = "production"
-            type  = "PLAINTEXT"
-          }
-        ])
+        ProjectName = aws_codebuild_project.deploy.name
       }
     }
   }
@@ -167,7 +231,7 @@ resource "aws_codepipeline" "main" {
 # EventBridge Rule to trigger pipeline on code changes
 resource "aws_cloudwatch_event_rule" "pipeline_trigger" {
   name        = "${var.project_name}-pipeline-trigger"
-  description = "Trigger pipeline on GitHub push"
+  description = "Trigger pipeline on execution state changes"
 
   event_pattern = jsonencode({
     source      = ["aws.codepipeline"]
@@ -187,4 +251,39 @@ resource "aws_cloudwatch_event_target" "pipeline_notification" {
   rule      = aws_cloudwatch_event_rule.pipeline_trigger.name
   target_id = "SendToSNS"
   arn       = aws_sns_topic.pipeline_notifications.arn
+
+  input_transformer {
+    input_paths = {
+      pipeline   = "$.detail.pipeline"
+      state      = "$.detail.state"
+      execution  = "$.detail.execution-id"
+    }
+    input_template = <<EOF
+{
+  "pipeline": "<pipeline>",
+  "state": "<state>",
+  "execution_id": "<execution>",
+  "message": "Pipeline <pipeline> is now in <state> state. Execution ID: <execution>"
+}
+EOF
+  }
+}
+
+# SNS Topic Policy to allow EventBridge
+resource "aws_sns_topic_policy" "pipeline_notifications" {
+  arn = aws_sns_topic.pipeline_notifications.arn
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "events.amazonaws.com"
+        }
+        Action   = "SNS:Publish"
+        Resource = aws_sns_topic.pipeline_notifications.arn
+      }
+    ]
+  })
 }
