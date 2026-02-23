@@ -82,7 +82,7 @@ aws secretsmanager put-secret-value \
 
 ### 5. Confirm SNS Subscriptions
 
-Check your email and confirm all SNS subscription links.
+Check your email and confirm all SNS subscription links
 
 ### 6. Test Pipeline
 ```bash
@@ -476,10 +476,10 @@ rm -rf sample-app/tests/__pycache__
 ##  Contributing
 
 This is a reference implementation. Feel free to:
-- Fork and customize
-- Add additional security checks
-- Extend policies
-- Improve documentation
+- Fork and customize.
+- Add additional security checks.
+- Extend policies.
+- Improve documentation.
 
 ##  License
 
